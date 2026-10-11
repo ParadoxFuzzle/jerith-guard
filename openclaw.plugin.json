@@ -2,7 +2,7 @@
   "id": "jerith-guard",
   "name": "Jerith Guard",
   "description": "Deterministic inbound guard: prompt-injection, hacking, exfiltration, persona-sabotage and spam detection on agent runs. No ML, no network, metadata-only logs.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "configSchema": {
     "type": "object",
     "properties": {
