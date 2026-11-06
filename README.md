@@ -62,7 +62,12 @@ The `hooks.allowConversationAccess: true` consent flag is required for the
 |---|---|---|
 | `enabled` | `true` | Master switch (checked live; no restart needed to flip) |
 | `protectOwnerTurns` | `true` | Owner messages are never hard-blocked, only logged |
-| `logDir` | `~/.openclaw/state/jerith-guard` | Where `decisions.jsonl` is written |
+| `logDir` | `~/.openclaw/state/jerith-guard` | Where `decisions.jsonl` is written (`~` expanded; any writable path) |
+| `injectionThreshold` | `3` | Score 1-50 a prompt must reach in the injection layer |
+| `spamThreshold` | `3` | Score 1-50 for the spam layer |
+| `hackingThreshold` | `3` | Score 1-50 for the hacking layer |
+| `exfilThreshold` | `3` | Score 1-50 for the exfiltration layer |
+| `impersonationThreshold` | `3` | Score 1-50 for the persona-sabotage layer |
 | `sensitivity` | `balanced` | Reserved for future threshold presets |
 
 ## How it works
