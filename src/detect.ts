@@ -51,7 +51,9 @@ const SPAM_RULES: Rule[] = [
   { id: "spam.discord-inv",  weight: 1, re: rx("(discord\\.gg|discord\\.com/invite)/[\\w-]+") },
   { id: "spam.crypto-shill", weight: 2, re: rx("\\b(free (crypto|airdrop|nonce?gas)|double your (crypto|btc|eth|sol)|pump group|mint now|presale live)\\b") },
   { id: "spam.link-farm",    weight: 2, re: rx("(https?:\\/\\/\\S+\\s*){4,}", "") },
-  { id: "spam.nonsense-dl",  weight: 1, re: rx("\\b\\w+\\b(?:.{1,20}?\\b\\w+\\b){30,}", "") },
+  // Linear word-flood rule (the previous .{1,20}? nested quantifier was a
+  // textbook catastrophic-backtracking shape on long input).
+  { id: "spam.nonsense-dl",  weight: 1, re: rx("\\b\\w+\\b(?:\\s+\\w+\\b){60,}", "") },
 ];
 
 // ── Hacking / exploitation ────────────────────────────────────────────────
@@ -89,11 +91,12 @@ const IMPERSONATION_RULES: Rule[] = [
 function runLayer(rules: Rule[], text: string, threshold: number): LayerHit {
   const matches: string[] = [];
   let score = 0;
-  let window = text.length;
-  // cap text per rule to bound regex work
-  const slice = window > 8000 ? text.slice(0, 8000) + "\n…[truncated]" + text.slice(-2000) : text;
+  // Bound regex work: 6k head + 2k tail is far beyond any real prompt, and it
+  // caps the cost of the backreference/repetition rules on adversarial input.
+  const slice = text.length > 8000 ? text.slice(0, 6000) + "\n…[truncated]…\n" + text.slice(-2000) : text;
   for (const rule of rules) {
     try {
+      rule.re.lastIndex = 0; // never let a stateful regex carry over between calls
       if (rule.re.test(slice)) {
         matches.push(rule.id);
         score += rule.weight;

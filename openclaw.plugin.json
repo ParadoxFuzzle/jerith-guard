@@ -2,7 +2,7 @@
   "id": "jerith-guard",
   "name": "Jerith Guard",
   "description": "Deterministic inbound guard: prompt-injection, hacking, exfiltration, persona-sabotage and spam detection on agent runs. No ML, no network, metadata-only logs.",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "configSchema": {
     "type": "object",
     "properties": {
@@ -26,6 +26,36 @@
           "relaxed"
         ],
         "default": "balanced"
+      },
+      "injectionThreshold": {
+        "type": "number",
+        "minimum": 1,
+        "maximum": 50,
+        "default": 3
+      },
+      "spamThreshold": {
+        "type": "number",
+        "minimum": 1,
+        "maximum": 50,
+        "default": 3
+      },
+      "hackingThreshold": {
+        "type": "number",
+        "minimum": 1,
+        "maximum": 50,
+        "default": 3
+      },
+      "exfilThreshold": {
+        "type": "number",
+        "minimum": 1,
+        "maximum": 50,
+        "default": 3
+      },
+      "impersonationThreshold": {
+        "type": "number",
+        "minimum": 1,
+        "maximum": 50,
+        "default": 3
       }
     },
     "additionalProperties": false

@@ -19,6 +19,8 @@ import { textResult } from "openclaw/plugin-sdk/tool-results";
 import { Type } from "typebox";
 import { analyze, DEFAULT_LAYER_CONFIG, type LayerConfig } from "./detect.js";
 import { GuardServer } from "./server.js";
+import * as os from "node:os";
+import * as path from "node:path";
 
 type AnyApi = {
   on(event: string, handler: (...args: unknown[]) => Promise<unknown> | unknown): void;
@@ -36,7 +38,13 @@ let cfg: Required<LayerConfig> & { enabled: boolean; protectOwnerTurns: boolean;
 
 function loadConfig(c: Record<string, unknown> | undefined) {
   if (!c) return;
-  const num = (k: string, d: number) => (typeof c[k] === "number" && Number.isFinite(c[k]) ? (c[k] as number) : d);
+  const num = (k: string, d: number) => {
+    const raw = c[k];
+    const n = typeof raw === "number" ? raw : Number(raw);
+    // Clamp so a typo in config can't disable a layer (0/negative) or make it
+    // unreachable (huge), which would silently turn the guard into a no-op.
+    return Number.isFinite(n) ? Math.min(50, Math.max(1, n)) : d;
+  };
   cfg.injectionThreshold = num("injectionThreshold", DEFAULT_LAYER_CONFIG.injectionThreshold);
   cfg.spamThreshold = num("spamThreshold", DEFAULT_LAYER_CONFIG.spamThreshold);
   cfg.hackingThreshold = num("hackingThreshold", DEFAULT_LAYER_CONFIG.hackingThreshold);
@@ -60,6 +68,11 @@ const baseEntry = defineToolPlugin({
       protectOwnerTurns: { type: "boolean", default: true },
       logDir: { type: "string", default: "" },
       sensitivity: { type: "string", enum: ["balanced", "strict", "relaxed"], default: "balanced" },
+      injectionThreshold: { type: "number", minimum: 1, maximum: 50, default: 3 },
+      spamThreshold: { type: "number", minimum: 1, maximum: 50, default: 3 },
+      hackingThreshold: { type: "number", minimum: 1, maximum: 50, default: 3 },
+      exfilThreshold: { type: "number", minimum: 1, maximum: 50, default: 3 },
+      impersonationThreshold: { type: "number", minimum: 1, maximum: 50, default: 3 },
     },
     additionalProperties: false,
   },
@@ -118,7 +131,8 @@ baseEntry.register = (api: GateApi) => {
     const pluginConfig = (api as unknown as { pluginConfig?: Record<string, unknown> }).pluginConfig;
     loadConfig(pluginConfig);
 
-    const stateDir = cfg.logDir || "/home/noodly/.openclaw/state/jerith-guard";
+    // Portable default: never bake an absolute home path into a published plugin.
+    const stateDir = cfg.logDir ? expandHome(cfg.logDir) : path.join(os.homedir(), ".openclaw", "state", "jerith-guard");
     server = new GuardServer(stateDir);
 
     api.logger.info(
@@ -142,7 +156,7 @@ baseEntry.register = (api: GateApi) => {
         server.recordVerdict(senderId, "flag", ["spam.burst"]);
         (api.logger.warn ?? api.logger.info).call(
           api.logger,
-          `jerith-guard: sender ${senderId.slice(0, 6)}… burst=${recent}/60s — flagged`
+          `jerith-guard: sender ${server.senderTag(senderId)} burst=${recent}/60s — flagged`
         );
       }
       return undefined;
@@ -163,13 +177,16 @@ baseEntry.register = (api: GateApi) => {
 
       const senderId = String(e.senderId ?? "unknown");
       const isOwner = e.senderIsOwner === true;
-      const senderState = !isOwner && server.recentCount(senderId) > 5;
+      // countRecent() only reads. recentCount() INCREMENTS the 60s window, so
+      // calling it here would double-count every run on top of message_received
+      // and flag senders at half the real threshold.
+      const recentCount = server.countRecent(senderId);
       const a = analyze(
         {
           text: e.prompt,
           senderIsOwner: isOwner,
-          isFirstContact: false,
-          senderRecentCount: server.recentCount(senderId),
+          isFirstContact: server.isFirstContact(senderId),
+          senderRecentCount: recentCount,
         },
         cfg
       );
@@ -179,7 +196,7 @@ baseEntry.register = (api: GateApi) => {
       if (a.action === "block" && (!isOwner || !cfg.protectOwnerTurns)) {
         (api.logger.warn ?? api.logger.info).call(
           api.logger,
-          `jerith-guard BLOCK sender=${senderId.slice(0, 6)}… layers=${a.triggered.join(",")} rules=${Object.values(a.layers).flatMap((h) => h.matches).join(",")}`
+          `jerith-guard BLOCK sender=${server.senderTag(senderId)} layers=${a.triggered.join(",")} rules=${Object.values(a.layers).flatMap((h) => h.matches).join(",")}`
         );
         return {
           decision: {
@@ -196,7 +213,7 @@ baseEntry.register = (api: GateApi) => {
       if (a.action === "flag") {
         (api.logger.info).call(
           api.logger,
-          `jerith-guard flag sender=${senderId.slice(0, 6)}… layers=${a.triggered.join(",")}`
+          `jerith-guard flag sender=${server.senderTag(senderId)} layers=${a.triggered.join(",")}`
         );
       } else if (isOwner && a.triggered.length) {
         api.logger.debug?.(
@@ -209,5 +226,11 @@ baseEntry.register = (api: GateApi) => {
     // 3) Expose the dry-run stats tool.
     toolRegister(api);
   };
+
+function expandHome(p: string): string {
+  if (p === "~") return os.homedir();
+  if (p.startsWith("~/")) return path.join(os.homedir(), p.slice(2));
+  return p;
+}
 
 export default baseEntry;

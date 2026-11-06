@@ -29,6 +29,23 @@ export class GuardServer {
     try { fs.mkdirSync(path.dirname(this.logPath), { recursive: true }); } catch { /* noop */ }
   }
 
+  /** Read-only 60s count for the gate: must not record a new message. */
+  countRecent(senderId: string, now = Date.now()): number {
+    const s = this.state.get(senderId);
+    if (!s) return 0;
+    return s.messageTimestamps.filter((t) => now - t < this.windowMs).length;
+  }
+
+  isFirstContact(senderId: string): boolean {
+    const s = this.state.get(senderId);
+    return !s || s.verdicts.length === 0;
+  }
+
+  /** Stable, non-reversible sender tag for logs; never the raw platform id. */
+  senderTag(senderId: string): string {
+    return this.hash(senderId).slice(0, 8);
+  }
+
   recentCount(senderId: string, now = Date.now()): number {
     const s = this.get(senderId, now);
     s.messageTimestamps = s.messageTimestamps.filter((t) => now - t < this.windowMs);
@@ -41,9 +58,11 @@ export class GuardServer {
     const s = this.get(senderId, now);
     s.verdicts.push({ at: now, action, layers });
     if (s.verdicts.length > 200) s.verdicts = s.verdicts.slice(-200);
-    const decay = 0.97;
-    const daysSince = (now - s.lastSeenAt) / (24 * 3600 * 1000);
-    s.threatScore = Math.max(0, s.threatScore * Math.pow(decay, daysSince * 24));
+    // Decay measured from the PREVIOUS activity time (before we stamp
+    // lastSeenAt below), 10% per idle day.
+    const daysSince = Math.max(0, (now - s.lastSeenAt) / 86_400_000);
+    s.threatScore = Math.max(0, s.threatScore * Math.pow(0.9, daysSince));
+    s.lastSeenAt = now;
     if (action === "block") s.threatScore += 2;
     else if (action === "flag") s.threatScore += 0.5;
     this.appendLog({
@@ -98,7 +117,7 @@ export class GuardServer {
       }
     } catch { /* no log yet */ }
     return [
-      `tracked senders: ${snap.tracked} (flagged actors: ${flaggedIds || flagged})`,
+      `tracked senders: ${snap.tracked} (flagged actors: ${flaggedIds})`,
       `decisions logged: ${total} total — ${blocked} blocked, ${flagged} flagged`,
       `decision log at: ${this.logPath} (metadata only, no message text)`,
     ].join("\n");
