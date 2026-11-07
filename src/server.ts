@@ -11,6 +11,9 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
 
+export const MAX_DECISION_LOG_BYTES = 2 * 1024 * 1024;
+const LOG_TRIM_TARGET_BYTES = Math.floor(MAX_DECISION_LOG_BYTES * 0.75);
+
 export interface SenderState {
   messageTimestamps: number[];
   verdicts: { at: number; action: string; layers: string[] }[];
@@ -29,7 +32,10 @@ export class GuardServer {
     this.logPath = path.join(stateDir, "decisions.jsonl");
     try {
       fs.mkdirSync(path.dirname(this.logPath), { recursive: true });
-      if (fs.existsSync(this.logPath)) fs.chmodSync(this.logPath, 0o600);
+      if (fs.existsSync(this.logPath)) {
+        fs.chmodSync(this.logPath, 0o600);
+        this.trimLogIfNeeded();
+      }
     } catch { /* best-effort */ }
   }
 
@@ -127,7 +133,7 @@ export class GuardServer {
     } catch { /* no log yet */ }
     return [
       `tracked senders: ${snap.tracked} (flagged actors: ${flaggedIds})`,
-      `decisions logged: ${total} total — ${blocked} blocked, ${flagged} flagged`,
+      `decisions in retained log: ${total} — ${blocked} blocked, ${flagged} flagged`,
       `decision log at: ${this.logPath} (metadata only, no message text)`,
     ].join("\n");
   }
@@ -148,6 +154,25 @@ export class GuardServer {
   private appendLog(obj: unknown) {
     try {
       fs.appendFileSync(this.logPath, JSON.stringify(obj) + "\n", { mode: 0o600 });
+      this.trimLogIfNeeded();
     } catch { /* best-effort */ }
+  }
+
+  /** Keep the JSONL log bounded; trim the oldest complete records when full. */
+  private trimLogIfNeeded() {
+    const size = fs.statSync(this.logPath).size;
+    if (size <= MAX_DECISION_LOG_BYTES) return;
+
+    const buf = fs.readFileSync(this.logPath);
+    const keepFrom = Math.max(0, size - LOG_TRIM_TARGET_BYTES);
+    const newline = buf.indexOf(0x0a, keepFrom);
+    const kept = newline >= 0 ? buf.subarray(newline + 1) : Buffer.alloc(0);
+    const tmp = `${this.logPath}.${process.pid}.tmp`;
+    try {
+      fs.writeFileSync(tmp, kept, { mode: 0o600 });
+      fs.renameSync(tmp, this.logPath);
+    } finally {
+      try { fs.rmSync(tmp, { force: true }); } catch { /* noop */ }
+    }
   }
 }

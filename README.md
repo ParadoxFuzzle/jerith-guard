@@ -6,8 +6,10 @@ before the model sees them — with a spam layer for the rest.
 
 - **No ML. No network calls. No API keys.** Every rule is a plain regex you
   can audit in one sitting (`src/detect.ts`).
-- **Metadata-only logs.** The decision log stores rule ids, layer scores,
-  verdict, and a SHA-256 hash of the sender id — never message text.
+- **Metadata-only, bounded logs.** The decision log stores rule ids, layer
+  scores, verdict, and a SHA-256 hash of the sender id — never message text.
+  The JSONL file is capped at 2 MiB; the oldest complete records are trimmed
+  when it fills.
 - **Owner-aware.** Messages from the configured owner are analyzed at half
   weight and never hard-blocked (their turns are logged, not stopped), so the
   guard never holds your own automation hostage.
@@ -38,7 +40,7 @@ cd jerith-guard && npm install && npm run build
 npm test
 ```
 
-The test suite covers the detection rules and sender-state decay behavior.
+The test suite covers the detection rules, long-prompt chunking, sender-state decay, and log retention.
 
 Then in `~/.openclaw/openclaw.json`:
 
@@ -78,8 +80,9 @@ The `hooks.allowConversationAccess: true` consent flag is required for the
 1. **`message_received`** — every inbound message increments a rolling 60s
    per-sender counter; bursts above 12/min get flagged.
 2. **`before_agent_run` (gate hook)** — analyzes the user prompt before any
-   model call. Non-owner prompts that hit a block layer are stopped *before*
-   the LLM dispatch, with a category and user-facing message.
+   model call. Long prompts are inspected in overlapping windows, so a payload
+   in the middle is not skipped. Non-owner prompts that hit a block layer are
+   stopped *before* the LLM dispatch, with a category and user-facing message.
 3. **`jerith-guard-stats`** — session tool: inspect stats, tail the decision
    log, or dry-run arbitrary text through all five layers (test an attack
    string without sending it).

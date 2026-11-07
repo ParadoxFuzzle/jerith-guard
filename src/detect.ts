@@ -100,18 +100,35 @@ const IMPERSONATION_RULES: Rule[] = [
   { id: "imp.cak-respond",    weight: 1, re: rx("\\brepeat after me[\\s\\S]{0,20}(i am|nihil|reprogram|malware)\\b", "i") },
 ];
 
-function runLayer(rules: Rule[], text: string, threshold: number): LayerHit {
+// Inspect the whole prompt in overlapping windows. This keeps per-regex work
+// bounded without creating a blind spot in the middle of long context.
+const CHUNK_SIZE = 8000;
+const CHUNK_OVERLAP = 2048;
+const CHUNK_STEP = CHUNK_SIZE - CHUNK_OVERLAP;
+
+function textChunks(text: string): string[] {
+  if (text.length <= CHUNK_SIZE) return [text];
+  const chunks: string[] = [];
+  for (let start = 0; start < text.length; start += CHUNK_STEP) {
+    chunks.push(text.slice(start, start + CHUNK_SIZE));
+    if (start + CHUNK_SIZE >= text.length) break;
+  }
+  return chunks;
+}
+
+function runLayer(rules: Rule[], chunks: string[], threshold: number): LayerHit {
   const matches: string[] = [];
   let score = 0;
-  // Bound regex work: 6k head + 2k tail is far beyond any real prompt, and it
-  // caps the cost of the backreference/repetition rules on adversarial input.
-  const slice = text.length > 8000 ? text.slice(0, 6000) + "\n…[truncated]…\n" + text.slice(-2000) : text;
   for (const rule of rules) {
     try {
       rule.re.lastIndex = 0; // never let a stateful regex carry over between calls
-      if (rule.re.test(slice)) {
-        matches.push(rule.id);
-        score += rule.weight;
+      for (const chunk of chunks) {
+        rule.re.lastIndex = 0;
+        if (rule.re.test(chunk)) {
+          matches.push(rule.id);
+          score += rule.weight;
+          break; // score each rule once, even across overlapping chunks
+        }
       }
     } catch {
       /* regex errors never block the pipeline */
@@ -160,13 +177,14 @@ export function analyze(
   const firstContactBoost = input.isFirstContact ? 1.25 : 1;
   const burstBoost = input.senderRecentCount > 5 ? 1.2 : 1;
   const mult = input.senderIsOwner ? ownerDiscount : firstContactBoost * burstBoost;
+  const chunks = textChunks(text);
 
   const layers = {
-    injection: runLayer(INJECTION_RULES, text, Math.ceil(cfg.injectionThreshold / mult)),
-    spam: runLayer(SPAM_RULES, text, Math.ceil(cfg.spamThreshold / (input.senderIsOwner ? 2 : 1))),
-    hacking: runLayer(HACKING_RULES, text, Math.ceil(cfg.hackingThreshold / mult)),
-    exfiltration: runLayer(EXFIL_RULES, text, Math.ceil(cfg.exfilThreshold / mult)),
-    impersonation: runLayer(IMPERSONATION_RULES, text, Math.ceil(cfg.impersonationThreshold / mult)),
+    injection: runLayer(INJECTION_RULES, chunks, Math.ceil(cfg.injectionThreshold / mult)),
+    spam: runLayer(SPAM_RULES, chunks, Math.ceil(cfg.spamThreshold / (input.senderIsOwner ? 2 : 1))),
+    hacking: runLayer(HACKING_RULES, chunks, Math.ceil(cfg.hackingThreshold / mult)),
+    exfiltration: runLayer(EXFIL_RULES, chunks, Math.ceil(cfg.exfilThreshold / mult)),
+    impersonation: runLayer(IMPERSONATION_RULES, chunks, Math.ceil(cfg.impersonationThreshold / mult)),
   };
 
   const triggered = Object.entries(layers).filter(([, hit]) => hit.matches.length > 0).map(([name]) => name);
