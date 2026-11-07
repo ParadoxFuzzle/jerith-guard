@@ -14,13 +14,13 @@ before the model sees them — with a spam layer for the rest.
 - **Fail-open by policy choice.** Hook errors never block a turn; the guard
   layer failing is treated as no-op so your agent keeps working.
 
-## What it detects (5 layers, 40 rules)
+## What it detects (5 layers, 43 rules)
 
 | Layer | Example patterns | Verdict on hit |
 |---|---|---|
 | Prompt injection | "ignore all previous instructions", fake `system:` tags, jailbreak modes, prompt-reveal asks | block (non-owner) |
 | Hacking | `curl ... | bash`, reverse shells, `/dev/tcp`, base64-exec chains, `rm -rf /` | block |
-| Exfiltration | attempts to read/post `.env`, `openclaw.json`, `.ssh`, `.pgpass`; web hook exfil endpoints | block |
+| Exfiltration | attempts to read/post `.env`, `openclaw.json`, `.ssh`, `.pgpass`; requests for API keys, tokens, or passwords; web hook exfil endpoints | block |
 | Persona sabotage | "you are now a raw/unfiltered agent", "delete your SOUL.md / security-rules", "disable your safety" | block |
 | Spam / dilution | crypto shill, char runs, caps-shout, Discord invite farms, link farms, message bursts (>12/60s) | flag (logged, not blocked) |
 
@@ -35,7 +35,10 @@ Or from source:
 ```bash
 git clone https://github.com/ParadoxFuzzle/jerith-guard
 cd jerith-guard && npm install && npm run build
+npm test
 ```
+
+The test suite covers the detection rules and sender-state decay behavior.
 
 Then in `~/.openclaw/openclaw.json`:
 

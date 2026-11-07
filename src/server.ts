@@ -17,6 +17,7 @@ export interface SenderState {
   threatScore: number;
   firstSeenAt: number;
   lastSeenAt: number;
+  lastVerdictAt: number;
 }
 
 export class GuardServer {
@@ -26,14 +27,20 @@ export class GuardServer {
 
   constructor(stateDir: string) {
     this.logPath = path.join(stateDir, "decisions.jsonl");
-    try { fs.mkdirSync(path.dirname(this.logPath), { recursive: true }); } catch { /* noop */ }
+    try {
+      fs.mkdirSync(path.dirname(this.logPath), { recursive: true });
+      if (fs.existsSync(this.logPath)) fs.chmodSync(this.logPath, 0o600);
+    } catch { /* best-effort */ }
   }
 
   /** Read-only 60s count for the gate: must not record a new message. */
   countRecent(senderId: string, now = Date.now()): number {
     const s = this.state.get(senderId);
     if (!s) return 0;
-    return s.messageTimestamps.filter((t) => now - t < this.windowMs).length;
+    // Read-only from the caller's perspective, but prune expired timestamps in
+    // place so a long-lived sender cannot grow this array without bound.
+    s.messageTimestamps = s.messageTimestamps.filter((t) => now - t < this.windowMs);
+    return s.messageTimestamps.length;
   }
 
   isFirstContact(senderId: string): boolean {
@@ -58,11 +65,13 @@ export class GuardServer {
     const s = this.get(senderId, now);
     s.verdicts.push({ at: now, action, layers });
     if (s.verdicts.length > 200) s.verdicts = s.verdicts.slice(-200);
-    // Decay measured from the PREVIOUS activity time (before we stamp
-    // lastSeenAt below), 10% per idle day.
-    const daysSince = Math.max(0, (now - s.lastSeenAt) / 86_400_000);
+    // Decay measured from the previous VERDICT, not the last inbound message:
+    // message_received stamps lastSeenAt immediately before every gated turn,
+    // so using it here would reset the decay window on every message.
+    const daysSince = Math.max(0, (now - s.lastVerdictAt) / 86_400_000);
     s.threatScore = Math.max(0, s.threatScore * Math.pow(0.9, daysSince));
     s.lastSeenAt = now;
+    s.lastVerdictAt = now;
     if (action === "block") s.threatScore += 2;
     else if (action === "flag") s.threatScore += 0.5;
     this.appendLog({
@@ -126,7 +135,7 @@ export class GuardServer {
   private get(senderId: string, now = Date.now()): SenderState {
     let s = this.state.get(senderId);
     if (!s) {
-      s = { messageTimestamps: [], verdicts: [], threatScore: 0, firstSeenAt: now, lastSeenAt: now };
+      s = { messageTimestamps: [], verdicts: [], threatScore: 0, firstSeenAt: now, lastSeenAt: now, lastVerdictAt: now };
       this.state.set(senderId, s);
     }
     return s;
@@ -138,7 +147,7 @@ export class GuardServer {
 
   private appendLog(obj: unknown) {
     try {
-      fs.appendFileSync(this.logPath, JSON.stringify(obj) + "\n");
+      fs.appendFileSync(this.logPath, JSON.stringify(obj) + "\n", { mode: 0o600 });
     } catch { /* best-effort */ }
   }
 }

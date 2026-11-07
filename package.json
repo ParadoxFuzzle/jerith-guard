@@ -1,10 +1,11 @@
 {
   "name": "jerith-guard",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "type": "module",
   "private": true,
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test",
     "plugin:build": "npm run build && openclaw plugins build --entry ./dist/index.js",
     "plugin:validate": "npm run build && openclaw plugins validate --entry ./dist/index.js"
   },

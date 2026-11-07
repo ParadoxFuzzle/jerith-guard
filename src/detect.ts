@@ -25,6 +25,16 @@ interface Rule {
 
 const rx = (source: string, flags = "i") => new RegExp(source, flags);
 
+// `rm` accepts clustered flags (-rf, -fr), split flags (-r -f), and long
+// forms. Match only the recursive+force combinations so scoped deletes do not
+// look like a root wipe.
+const RM_RECURSIVE_FORCE = String.raw`(?:-[a-z]*r[a-z]*f[a-z]*|-[a-z]*f[a-z]*r[a-z]*|-r\s+-f|-f\s+-r|--recursive\s+--force|--force\s+--recursive)`;
+const ROOT_TARGET = "(?:[\"']?(?:/|~|\\$HOME|\\$\\{HOME\\})[\"']?(?:/|\\s|$|[*?.]))";
+
+// Dotfiles cannot use a leading \b: in "cat .env" the boundary before "."
+// does not exist because the preceding space and "." are both non-word.
+const SENSITIVE_FILES = String.raw`(?:\b(?:openclaw\.json|credentials?\.json|agent\.env)\b|(?<![\w.-])(?:\.env|\.api-keys|\.ssh|\.pgpass)(?!\w))`;
+
 // ── Prompt injection / agent hijack ────────────────────────────────────────
 const INJECTION_RULES: Rule[] = [
   { id: "inj.ignore-previous", weight: 3, re: rx("\\bignore (all |any |your |the )?(previous|prior|above|earlier) (instructions|prompts?|rules?|directives?|messages?)\\b") },
@@ -64,16 +74,18 @@ const HACKING_RULES: Rule[] = [
   { id: "hack.base64-exec",  weight: 3, re: rx("(echo|printf)\\s+[A-Za-z0-9+/=]{80,}\\s*\\|\\s*(base64\\s*-?d|openssl?\\s+enc)\\b.{0,40}\\|\n?.{0,20}\\b(sh|bash)\\b", "i") },
   { id: "hack.eval-inject",  weight: 2, re: rx("\\b(eval|exec|system|popen)\\s*\\(\\s*[\"']\\s*\\$|\\$\\{\\s*IFS\\s*\\}|\\b\\$(IFS|\\{IFS\\})\\b") },
   { id: "hack.path-traverse",weight: 2, re: rx("(\\.\\./){4,}\\w+") },
-  { id: "hack.sudo-force",   weight: 2, re: rx("\\bsudo\\b.{0,60}\\b(rm\\s+-rf\\s+[/~]|mkfs|dd\\s+if=|chmod\\s+777\\s+/)\\b") },
-  { id: "hack.rmrf-root",    weight: 4, re: rx("\\brm\\s+-rf\\s+(/|~|\\$HOME)\\s") },
+  { id: "hack.sudo-force",   weight: 2, re: rx(`\\bsudo\\b.{0,60}(?:\\brm\\s+${RM_RECURSIVE_FORCE}\\s+(?:--\\s+)?${ROOT_TARGET}|\\bmkfs\\b|\\bdd\\s+if=|\\bchmod\\s+777\\s+/)`) },
+  { id: "hack.rmrf-root",    weight: 4, re: rx(`\\brm\\s+${RM_RECURSIVE_FORCE}\\s+(?:--\\s+)?${ROOT_TARGET}`) },
   { id: "hack.ssh-key-theft",weight: 3, re: rx("\\b(cat|cp|base64)\\b.{0,30}~?/\\.ssh/(id_rsa|id_ed25519|authorized_keys|known_hosts)\\b") },
-  { id: "hack.sqlmap-xss",   weight: 1, re: rx("\\b(sqlmap|--dbs|union select|<script>document\\.|javascript:)\\b") },
+  { id: "hack.sqlmap",       weight: 3, re: rx("\\bsqlmap\\b") },
+  { id: "hack.xss-probe",    weight: 2, re: rx("(?:--dbs\\b|\\bunion\\s+select\\b|<script\\b|\\bjavascript:)") },
 ];
 
 // ── Credential / secret exfiltration ─────────────────────────────────────
 const EXFIL_RULES: Rule[] = [
-  { id: "exfil.env-dump",    weight: 3, re: rx("\\b(cat|print|type|curl|post)\\b.{0,40}\\b(\\.env|openclaw\\.json|\\.api-keys|credentials?\\.json|\\.ssh|\\.pgpass|agent\\.env)\\b") },
+  { id: "exfil.env-dump",    weight: 3, re: rx(`\\b(cat|print|type|read|show|dump|head|tail|less|more|grep|rg|cp|scp|rsync|base64|curl|post|upload|send)\\b.{0,40}${SENSITIVE_FILES}`) },
   { id: "exfil.token-mention",weight: 2, re: rx("\\b(send|post|upload|exfiltrate|dm|message)\\b.{0,60}\\b(api[- ]?key|token|secret|password|credentials?)\\b", "i") },
+  { id: "exfil.credential-request", weight: 3, re: rx("\\b(send|post|upload|exfiltrate|dm|message|give|share|reveal|show)\\b.{0,40}\\b(your|the|their|any)\\b.{0,20}\\b(api[- ]?key|access token|token|secret|password|credentials?)\\b") },
   { id: "exfil.webhook-post",weight: 3, re: rx("\\bcurl\\b.{0,60}\\b(discord\\.com/api/webhooks|hooks\\.slack\\.com|webhook\\.site|requestbin|pipedream)\\b") },
   { id: "exfil.config-probe",weight: 2, re: rx("\\b(read|show|dump|cat)\\b.{0,40}\\b(litellm[-_]config|openclaw\\.json|master[_ ]key)\\b") },
 ];
